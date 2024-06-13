@@ -1,0 +1,186 @@
+---
+title: "Data Example"
+author: "Alton Barbehenn"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set-Up
+
+```{r libraries}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(knitr)
+
+library(ebTobit)
+library(zCompositions)
+source("Utils.R") # GSimp and `generate_data()`
+source("EBMTobit.R")
+source("fullEM.R")
+```
+
+
+# Make Data Set
+
+```{r make data set}
+# cytokines = c("IL.1b", "IL.6", "IL.8", "IL.18", "MCP.3", "MIP.1a", "IL.10")
+cytokines = c("IFN.b", "IFNg", "MIP.1a", "MCP.3", "IL.17A", "TNFa", "GM.CSF")
+
+metadf = read_csv("~/Box/Alton/Military IL-1b Study/data/MSD_LOD_values.csv") %>%
+    filter(Assay %in% cytokines) %>%
+    dplyr::select(assay = Assay, `Limit of Detection (pg/mL)`)
+
+df_raw = read_csv("~/Box/Alton/Military IL-1b Study/data/cytokines_merged_wide_outliers_dropped.csv")
+
+THRESH = 14 # "duplicate" samples are a maximum of 14 days apart
+scales = df_raw %>%
+    arrange(ID, Sample_Date) %>%
+    mutate(gp = cumsum(c(0L, diff(Sample_Date) > THRESH)), .by = ID) %>%
+    count(ID, gp) %>%
+    filter(n == 2) %>%
+    inner_join(df_raw %>%
+                   arrange(ID, Sample_Date) %>%
+                   mutate(gp = cumsum(c(0L, diff(Sample_Date) > THRESH)), .by = ID),
+               by = c("ID", "gp")) %>%
+    mutate(across(IFNg:TGF.b3, log)) %>%
+    summarise(across(IFNg:TGF.b3, diff), .by = c(ID, gp)) %>%
+    summarise(across(IFNg:TGF.b2, ~mean(abs(.x), na.rm = TRUE)*sqrt(pi)/2)) %>%
+    pivot_longer(everything(), names_to = "assay", values_to = "sd")
+
+df = df_raw %>%
+    slice_max(Sample_Date, by = ID, with_ties = FALSE) %>%
+    dplyr::select(ID, all_of(cytokines)) %>%
+    na.omit() %>%
+    pivot_longer(cols = all_of(cytokines), names_to = "assay", values_to = "concentration (pg/mL)") %>%
+    inner_join(metadf, by = "assay") %>%
+    mutate(across(c(`concentration (pg/mL)`, `Limit of Detection (pg/mL)`), log)) %>%
+    inner_join(scales, by = "assay") %>%
+    mutate(obs = ifelse(`concentration (pg/mL)` < `Limit of Detection (pg/mL)`, NA, `concentration (pg/mL)`)) %>%
+    mutate(L = ifelse(is.na(obs), min(`concentration (pg/mL)`, na.rm = TRUE), `concentration (pg/mL)`)) %>% #LOD
+    mutate(R = ifelse(is.na(obs), `Limit of Detection (pg/mL)`, `concentration (pg/mL)`)) #LOQ
+
+# These measurements are approximately normal
+X = df %>%
+    pivot_wider(id_cols = ID, names_from = assay, values_from = obs) %>%
+    dplyr::select(-ID) %>%
+    as.matrix()
+
+L = df %>%
+    pivot_wider(id_cols = ID, names_from = assay, values_from = L) %>%
+    dplyr::select(-ID) %>%
+    as.matrix()
+
+R = df %>%
+    pivot_wider(id_cols = ID, names_from = assay, values_from = R) %>%
+    dplyr::select(-ID) %>%
+    as.matrix()
+
+TH = df %>%
+    pivot_wider(id_cols = ID, names_from = assay, values_from = `concentration (pg/mL)`) %>%
+    dplyr::select(-ID) %>%
+    as.matrix()
+
+S1 = df %>%
+    pivot_wider(id_cols = ID, names_from = assay, values_from = sd) %>%
+    dplyr::select(-ID) %>%
+    as.matrix()
+
+L = L/S1
+R = R/S1
+X = X/S1
+TH = TH/S1
+```
+
+
+### Detection Limits and Noise Levels
+```{r}
+bind_rows(
+    # number of cytokines below limit of detection
+    # df_raw %>%
+    #     slice_max(Sample_Date, by = ID, with_ties = FALSE) %>%
+    #     select(ID, all_of(cytokines)) %>%
+    #     summarise(across(all_of(cytokines), ~sum(is.na(.x)))) %>% 
+    #     mutate(name = "[0,LOD)"),
+    # number of cytokines below limit of quantification but above limit of detection
+    colSums(is.na(X)) %>% 
+        t() %>% 
+        as_tibble() %>%
+        mutate(name = "[LOD, LOQ]"),
+    # quantified samples 
+    colSums(!is.na(X)) %>% 
+        t() %>% 
+        as_tibble() %>%
+        mutate(name = "Quantified Samples"),
+    # variance estimate
+    scales %>% 
+        filter(assay %in% cytokines) %>% 
+        mutate(s2 = sd*sd) %>% 
+        dplyr::select(-sd) %>% 
+        pivot_wider(names_from = assay, values_from = s2) %>%
+        mutate(name = "s2")
+) %>%
+    relocate(name, .before = everything()) %>%
+    kable(format = "markdown", digits = 2)
+```
+
+
+# Fit Methods
+
+```{r}
+n = nrow(L)
+p = ncol(L)
+
+# Collect method fits
+est = list()
+
+#### empirical Bayes methods ####
+
+# MCMC sample from marginal
+est[["eb_EBMTobit"]] = EBMTobit(L = L, R = R, K = 50, algorithm = ALG, rtol = RTOL)
+
+# generalized exemplar
+est[["eb_exemplar_MLE"]] = fitted(ebTobit(L = L, R = R, gr = (L + R)/2, algorithm = ALG, rtol = RTOL))
+
+# full EM fitting method
+mods = lapply(1:50, FUN = function(i) fullEM(L = L, R = R, gr = sapply(1:ncol(L), function(j) runif(200, min = L[,j], max = R[,j])), rtol = RTOL))
+est[["eb_fullSingle"]] = fitted(mods[[1]])
+est[["eb_fullBest"]] = fitted(mods[[which.max(sapply(mods, logLik))]])
+est[["eb_fullAvg50"]] = apply(simplify2array(lapply(mods, fitted)), MARGIN = 1:2, FUN = mean)
+
+#### other methods ####
+
+## QRILC
+est[["QRILC"]] = impute.QRILC(X)[[1]]
+
+## zCompositions
+LOD = exp(apply(R, 2, min, na.rm = TRUE))
+LOD[colSums(is.na(X)) == 0] = 0
+est[["zCompositions"]] = log(as.matrix(multLN(X = exp(X), label = NA, dl = LOD)))
+
+## trKNN
+est[["trKNN"]] = tryCatch(
+    t(imputeKNN(t(X), k = 3, dist = "truncation", perc = 0)),
+    error = function(e) matrix(NA, n, p)
+)
+
+## GSimp
+est[["GSimp"]] = GS_impute(as.data.frame(X), iters_each=50, iters_all=10,
+                           initial='qrilc', lo=apply(L, 2, min) - 0.1, hi='min', n_cores=1,
+                           imp_model='glmnet_pred')$data_imp |> as.matrix()
+
+```
+
+```{r}
+tibble(
+    method = names(est),
+    spearman = sapply(est, function(x) cor(x[is.na(X)], TH[is.na(X)], method = "spearman", use = "pairwise.complete.obs")),
+    nmse = sapply(est, function(x) mean(sapply(1:ncol(x), function(j) 
+        sum((rank(x[,j][is.na(X[,j])]) - rank(TH[,j][is.na(X[,j])]))^2)/sum(rank(x[,j][is.na(X[,j])])^2)), na.rm = TRUE))
+    ) %>% kable("markdown", digits = 3) 
+```
+
