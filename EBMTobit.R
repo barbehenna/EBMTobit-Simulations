@@ -36,7 +36,14 @@ EBMTobit <- function(L, R = L, gr.init = (L+R)/2, K = 50, ...) {
     out <- matrix(0, n, p)
     gr.next <- gr.init
 
-    # iterative fitting
+    # iterative fitting - burn-in
+    # for (i in seq_len(K)) {
+    #     fit <- ebTobit(L = L, R = R, gr = gr.next, ...)
+    #     gr.next <- fit$gr[sample(m, size = m, replace = TRUE, prob = fit$prior),] + matrix(rnorm(m*p), m, p)
+    #     out <- out + fitted(fit)
+    # }
+    # out <- matrix(0, n, p)
+    # estimate
     for (i in seq_len(K)) {
         fit <- ebTobit(L = L, R = R, gr = gr.next, ...)
         gr.next <- fit$gr[sample(m, size = m, replace = TRUE, prob = fit$prior),] + matrix(rnorm(m*p), m, p)

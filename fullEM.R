@@ -30,7 +30,7 @@ fullEM <- function(L, R = L, gr = (R+L)/2, s1 = 1, pos_lik = TRUE,
     for (iter in seq_len(maxiter)) {
         ## E step
         lik <- likMat(L, R, gr, s1)
-        if (pos_lik) lik <- pmax(lik, .Machine$double.xmin)
+        if (pos_lik) lik <- pmax(lik, .Machine$double.xmin, na.rm = TRUE)
         
         z <- lik %*% diag(pr) # conditional probabilities
         z <- z / rowSums(z)
@@ -45,13 +45,16 @@ fullEM <- function(L, R = L, gr = (R+L)/2, s1 = 1, pos_lik = TRUE,
         loss_new <- nrow(L)*sum(pr*log(pr)) - sum(v %*% pr)/2
         
         ## Convergence check (weights stop updating)
-        if ( abs((loss_new - loss_old)/loss_new) < rtol ) break
+        if ( is.na(loss_new) | abs((loss_new - loss_old)/loss_new) < rtol ) break
         loss_old <- loss_new
     }
     
+    lik = likMat(L, R, gr, s1)
+    if (pos_lik) lik = pmax(lik, .Machine$double.xmin, na.rm = TRUE)
+
     new_ebTobit(
         prior = pr,
         gr = gr,
-        lik = likMat(L, R, gr, s1)
+        lik = lik
     )
 }
