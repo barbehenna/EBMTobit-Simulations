@@ -22,9 +22,9 @@ The last two methods cannot be used in practice but are used to motivate the emp
 Follow the following steps to set up the simulation environment. We used R version 4.2.2 (2022-10-31) in our simulations.
 
 1. Set up the GSimp method
-    a. Clone the https://github.com/WandeRum/GSimp repository
-    a. Update line 3 in this repository's `Utils.R` to contain the location of the GSimp repository
-    a. Remove the following lines: lines 9-10 in `GSimp.R`, lines 7-8 in `GSimp_evaluation.R`, and lines 7-8 in `Impute_wrapper.R`
+    * Clone the https://github.com/WandeRum/GSimp repository
+    * Update line 3 in this repository's `Utils.R` to contain the location of the GSimp repository
+    * Remove the following lines: lines 9-10 in `GSimp.R`, lines 7-8 in `GSimp_evaluation.R`, and lines 7-8 in `Impute_wrapper.R`
 1. Ensure that the following packages are installed (later versions may work, but the following versions were used in the published simulations); most of the packages are on CRAN, but some are on BioConductor
 ```
  [1] ropls_1.30.0          reshape2_1.4.4        vegan_2.6-4          
